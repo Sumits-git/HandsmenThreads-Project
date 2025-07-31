@@ -1,0 +1,60 @@
+trigger StockDeductionTrigger on HandsMen_Order__c (after insert, after update) {
+    try {
+        Set<Id> productIds = new Set<Id>();
+
+        // Step 1: Collect all product IDs from confirmed orders
+        for (HandsMen_Order__c order : Trigger.new) {
+            if (
+                order.Status__c != null && 
+                order.Status__c.equalsIgnoreCase('Confirmed') && 
+                order.HandsMen_Product__c != null
+            ) {
+                productIds.add(order.HandsMen_Product__c);
+            }
+        }
+
+        if (productIds.isEmpty()) return;
+
+        // Step 2: Query inventory records for those product IDs
+        Map<Id, Inventory__c> inventoryMap = new Map<Id, Inventory__c>(
+            [SELECT Id, Stock_Quantity__c, HandsMen_Product__c 
+             FROM Inventory__c 
+             WHERE HandsMen_Product__c IN :productIds]
+        );
+
+        List<Inventory__c> inventoriesToUpdate = new List<Inventory__c>();
+
+        // Step 3: Match orders to inventories and deduct stock
+        for (HandsMen_Order__c order : Trigger.new) {
+            if (
+                order.Status__c != null && 
+                order.Status__c.equalsIgnoreCase('Confirmed') && 
+                order.HandsMen_Product__c != null
+            ) {
+                for (Inventory__c inv : inventoryMap.values()) {
+                    if (inv.HandsMen_Product__c == order.HandsMen_Product__c) {
+                        if (inv.Stock_Quantity__c >= order.Quantity__c) {
+                            inv.Stock_Quantity__c -= order.Quantity__c;
+                            inventoriesToUpdate.add(inv);
+                        } else {
+                            order.addError(
+                                'Only ' + inv.Stock_Quantity__c +
+                                ' unit(s) available in stock for the selected product. ' +
+                                'Please reduce the order quantity or restock inventory.'
+                            );
+                        }
+                        break; // exit the inventory loop after matching
+                    }
+                }
+            }
+        }
+
+        // Step 4: Update inventory if changes are made
+        if (!inventoriesToUpdate.isEmpty()) {
+            update inventoriesToUpdate;
+        }
+    } catch (Exception e) {
+        System.debug('Exception in StockDeductionTrigger: ' + e.getMessage());
+        // Optional: Add error handling/logging
+    }
+}
